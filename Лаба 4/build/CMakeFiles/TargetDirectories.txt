@@ -1,0 +1,3 @@
+/Users/alenasamsonova/Desktop/Лаба 4/build/CMakeFiles/bank_system.dir
+/Users/alenasamsonova/Desktop/Лаба 4/build/CMakeFiles/edit_cache.dir
+/Users/alenasamsonova/Desktop/Лаба 4/build/CMakeFiles/rebuild_cache.dir
