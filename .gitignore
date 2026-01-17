@@ -54,3 +54,8 @@ _deps
 *.tmp
 *.log
 *.bak
+
+# Large JSON test files (> 100 MB)
+data/*.json
+!data/test_file.json
+!data/test_with_errors.json
