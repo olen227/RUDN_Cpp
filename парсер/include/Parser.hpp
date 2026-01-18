@@ -80,6 +80,21 @@ public:
 
     // Статический метод для парсинга файла с прогресс-баром
     static JsonValue parseFileWithProgress(const std::string& filename, ProgressCallback callback = nullptr);
+
+    // Многопоточный парсинг JSON массива из файла
+    static JsonValue parseFileParallel(const std::string& filename, unsigned int threadCount = 0,
+                                       ProgressCallback callback = nullptr);
+
+private:
+    // Вспомогательные методы для параллельного парсинга
+    static std::vector<std::pair<size_t, size_t>> splitContentIntoChunks(
+        const std::string& content, size_t threadCount);
+
+    static std::vector<std::pair<size_t, size_t>> splitArrayTokens(
+        const std::vector<Token>& tokens, size_t threadCount);
+
+    static JsonValue parseTokenRange(const std::vector<Token>& allTokens,
+                                     size_t start, size_t end);
 };
 
 } // namespace json

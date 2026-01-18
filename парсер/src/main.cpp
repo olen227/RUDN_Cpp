@@ -189,7 +189,7 @@ void showPerformanceMetrics();
 void generateJsonFile();
 void validateWithErrors();
 void showSystemInfo();
-void parallelValidation();
+void parallelParsing();
 void generateLargeFile();
 int calculateDepth(const JsonValue& value, int currentDepth = 0);
 
@@ -234,14 +234,13 @@ void printMenu() {
     std::cout << "  [5]  Добавить элемент\n";
     std::cout << "  [6]  Удалить элемент\n";
     std::cout << "  [7]  Сохранить в файл\n";
-    std::cout << "  [8]  Валидация JSON\n";
-    std::cout << "  [9]  Статистика\n";
-    std::cout << "  [10] Метрики выполнения\n";
-    std::cout << "  [11] Генератор JSON файлов\n";
-    std::cout << "  [12] Валидация с подсчётом ошибок\n";
-    std::cout << "  [13] Информация о системе\n";
-    std::cout << "  [14] Многопоточная валидация\n";
-    std::cout << "  [15] Генератор больших файлов (ГБ)\n";
+    std::cout << "  [8]  Статистика\n";
+    std::cout << "  [9]  Метрики выполнения\n";
+    std::cout << "  [10] Генератор JSON файлов\n";
+    std::cout << "  [11] Валидация с подсчётом ошибок\n";
+    std::cout << "  [12] Информация о системе\n";
+    std::cout << "  [13] Генератор больших файлов (ГБ)\n";
+    std::cout << "  [14] Многопоточный парсинг файла\n";
     std::cout << "  [0]  Выход\n";
     std::cout << "\n";
 }
@@ -1984,6 +1983,143 @@ void generateLargeFile() {
     pressEnterToContinue();
 }
 
+void parallelParsing() {
+    printHeader();
+    std::cout << "\n=== Многопоточный парсинг файла ===\n\n";
+
+    CPUInfo cpuInfo = SystemInfo::getCPUInfo();
+
+    std::cout << "Процессор: " << cpuInfo.name << "\n";
+    std::cout << "Доступно потоков: от 1 до " << cpuInfo.logicalCores << "\n";
+    std::cout << "Рекомендуется: " << cpuInfo.recommendedThreads << " потоков\n\n";
+
+    std::cout << "Количество потоков [" << cpuInfo.recommendedThreads << "]: ";
+    int threadCount;
+    std::cin >> threadCount;
+
+    if (std::cin.fail() || threadCount < 1) {
+        std::cin.clear();
+        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+        threadCount = cpuInfo.recommendedThreads;
+    }
+
+    if (threadCount > static_cast<int>(cpuInfo.logicalCores)) {
+        threadCount = cpuInfo.logicalCores;
+        std::cout << "[!] Ограничено до " << threadCount << " потоков\n";
+    }
+
+    // Получаем список файлов из папки data
+    auto dataFiles = getDataFiles();
+    std::string filename;
+
+    if (!dataFiles.empty()) {
+        std::cout << "\nДоступные файлы в папке data/:\n";
+        printSeparator();
+
+        for (size_t i = 0; i < dataFiles.size(); ++i) {
+            std::cout << "  [" << (i + 1) << "] " << std::left << std::setw(35)
+                      << dataFiles[i].first << " (" << formatFileSizeShort(dataFiles[i].second) << ")\n";
+        }
+        std::cout << "  [0] Указать путь вручную\n";
+        printSeparator();
+
+        std::cout << "\nВыберите файл: ";
+        int choice;
+        std::cin >> choice;
+
+        if (std::cin.fail()) {
+            std::cin.clear();
+            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+            choice = -1;
+        }
+
+        if (choice > 0 && choice <= static_cast<int>(dataFiles.size())) {
+            filename = (fs::path(getDataPath()) / dataFiles[choice - 1].first).string();
+        } else if (choice == 0) {
+            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+            filename = getInput("Путь к файлу: ");
+        } else {
+            std::cout << "[!] Неверный выбор.\n";
+            pressEnterToContinue();
+            return;
+        }
+    } else {
+        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+        filename = getInput("Путь к файлу: ");
+    }
+
+    // Проверяем существование файла и получаем размер
+    std::ifstream testFile(filename, std::ios::binary | std::ios::ate);
+    if (!testFile.is_open()) {
+        std::cout << "\n[ОШИБКА] Не удалось открыть файл: " << filename << "\n";
+        pressEnterToContinue();
+        return;
+    }
+
+    size_t fileSize = testFile.tellg();
+    testFile.close();
+
+    printHeader();
+    std::cout << "\n=== Многопоточный парсинг ===\n\n";
+
+    std::cout << std::left;
+    std::cout << std::setw(30) << "Файл:" << filename << "\n";
+    std::cout << std::setw(30) << "Размер:" << formatFileSize(fileSize) << "\n";
+    std::cout << std::setw(30) << "Потоков:" << threadCount << "\n";
+    printSeparator();
+
+    std::cout << "\nПарсинг файла...\n\n";
+
+    try {
+        ProgressBar progressBar(fileSize, "Парсинг");
+        auto start = std::chrono::high_resolution_clock::now();
+
+        JsonValue result = Parser::parseFileParallel(filename, threadCount,
+            [&](size_t current, size_t total) {
+                progressBar.update(current);
+            });
+
+        progressBar.finish();
+        auto end = std::chrono::high_resolution_clock::now();
+
+        double timeMs = std::chrono::duration<double, std::milli>(end - start).count();
+
+        std::cout << "\n";
+        printSeparator();
+        std::cout << "[OK] Файл успешно распарсен!\n";
+        printSeparator();
+
+        std::cout << std::left;
+        std::cout << std::setw(30) << "Время парсинга:" << std::fixed << std::setprecision(2)
+                  << (timeMs / 1000.0) << " сек\n";
+        std::cout << std::setw(30) << "Пропускная способность:"
+                  << std::fixed << std::setprecision(2)
+                  << ((fileSize / (1024.0 * 1024.0)) / (timeMs / 1000.0)) << " МБ/с\n";
+        std::cout << std::setw(30) << "Использовано потоков:" << threadCount << "\n";
+
+        if (result.isArray()) {
+            std::cout << std::setw(30) << "Элементов в массиве:" << result.asArray().size() << "\n";
+        } else if (result.isObject()) {
+            std::cout << std::setw(30) << "Тип JSON:" << "Объект\n";
+        }
+
+        printSeparator();
+
+        std::string loadChoice = getInput("\nЗагрузить этот файл в редактор? (да/нет): ");
+        if (loadChoice == "да" || loadChoice == "yes" || loadChoice == "y") {
+            g_currentJson = std::move(result);
+            g_currentFile = filename;
+            g_isModified = false;
+            std::cout << "[OK] Файл загружен в редактор.\n";
+        }
+
+    } catch (const std::exception& e) {
+        std::cout << "\n[ОШИБКА] " << e.what() << "\n";
+    }
+
+    pressEnterToContinue();
+}
+
 int main() {
     while (true) {
         printHeader();
@@ -1999,14 +2135,13 @@ int main() {
             case 5: addElement(); break;
             case 6: removeElement(); break;
             case 7: saveFile(); break;
-            case 8: validateJson(); break;
-            case 9: showStatistics(); break;
-            case 10: showPerformanceMetrics(); break;
-            case 11: generateJsonFile(); break;
-            case 12: validateWithErrors(); break;
-            case 13: showSystemInfo(); break;
-            case 14: parallelValidation(); break;
-            case 15: generateLargeFile(); break;
+            case 8: showStatistics(); break;
+            case 9: showPerformanceMetrics(); break;
+            case 10: generateJsonFile(); break;
+            case 11: validateWithErrors(); break;
+            case 12: showSystemInfo(); break;
+            case 13: generateLargeFile(); break;
+            case 14: parallelParsing(); break;
             case 0:
                 if (g_isModified) {
                     printHeader();

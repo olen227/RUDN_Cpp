@@ -176,39 +176,72 @@ ParallelResult ParallelProcessor::validateContent(
 
     auto startTime = std::chrono::high_resolution_clock::now();
 
-    // Разбиваем на чанки
+    // Разбиваем на чанки (границы элементов массива)
     auto chunks = splitIntoChunks(content, m_threadCount);
     result.totalChunks = chunks.size();
     m_progress.totalChunks = chunks.size();
 
+    // Если всего один чанк, используем однопоточную валидацию
+    if (chunks.size() == 1) {
+        Validator validator(false);
+        auto validationResult = validator.validate(content);
+
+        result.errors = std::move(validationResult.errors);
+        result.processedChunks = 1;
+        result.totalErrors = result.errors.size();
+        result.success = result.errors.empty();
+
+        auto endTime = std::chrono::high_resolution_clock::now();
+        result.totalTimeMs = std::chrono::duration<double, std::milli>(endTime - startTime).count();
+
+        if (result.totalTimeMs > 0) {
+            result.throughputMBps = (content.size() / (1024.0 * 1024.0)) / (result.totalTimeMs / 1000.0);
+        }
+
+        m_progress.processedChunks = 1;
+        m_progress.processedBytes = content.size();
+        m_progress.errorsFound = result.totalErrors;
+        m_progress.isComplete = true;
+
+        return result;
+    }
+
     std::vector<std::thread> threads;
     std::vector<std::vector<ValidationError>> threadErrors(chunks.size());
+    std::mutex errorMutex;
 
-    // Запускаем потоки
+    // Запускаем потоки для валидации элементов
     for (size_t i = 0; i < chunks.size(); ++i) {
-        threads.emplace_back([this, &content, &chunks, &threadErrors, i, progressCallback]() {
+        threads.emplace_back([this, &content, &chunks, &threadErrors, &errorMutex, i, progressCallback]() {
             auto& chunk = chunks[i];
             std::string chunkContent = content.substr(chunk.first, chunk.second - chunk.first);
 
-            // Валидируем чанк
-            Validator validator(false);
-            auto chunkResult = validator.validate(chunkContent);
+            // Оборачиваем чанк в массив, чтобы сделать его валидным JSON
+            std::string wrappedContent = "[" + chunkContent + "]";
 
-            // Корректируем позиции ошибок
+            // Валидируем чанк как массив JSON элементов
+            Validator validator(false);
+            auto chunkResult = validator.validate(wrappedContent);
+
+            // Корректируем позиции ошибок относительно начала файла
+            size_t lineOffset = 0;
+            for (size_t j = 0; j < chunk.first && j < content.size(); ++j) {
+                if (content[j] == '\n') lineOffset++;
+            }
+
             for (auto& err : chunkResult.errors) {
-                // Пересчитываем строку относительно начала файла
-                size_t lineOffset = 0;
-                for (size_t j = 0; j < chunk.first && j < content.size(); ++j) {
-                    if (content[j] == '\n') lineOffset++;
-                }
                 err.line += lineOffset;
             }
 
-            threadErrors[i] = std::move(chunkResult.errors);
+            {
+                std::lock_guard<std::mutex> lock(errorMutex);
+                threadErrors[i] = std::move(chunkResult.errors);
+            }
 
-            m_progress.processedChunks++;
-            m_progress.processedBytes += chunkContent.size();
-            m_progress.errorsFound += threadErrors[i].size();
+            // Атомарно обновляем прогресс
+            m_progress.processedChunks.fetch_add(1, std::memory_order_relaxed);
+            m_progress.processedBytes.fetch_add(chunkContent.size(), std::memory_order_relaxed);
+            m_progress.errorsFound.fetch_add(threadErrors[i].size(), std::memory_order_relaxed);
 
             if (progressCallback) {
                 progressCallback(m_progress);
@@ -231,7 +264,7 @@ ParallelResult ParallelProcessor::validateContent(
         }
     }
 
-    result.processedChunks = m_progress.processedChunks;
+    result.processedChunks = m_progress.processedChunks.load();
     result.totalErrors = result.errors.size();
     result.success = result.errors.empty();
 
@@ -272,16 +305,20 @@ std::string ParallelGenerator::generateChunk(size_t targetSize, int depth, int s
 
     std::ostringstream oss;
     size_t currentSize = 0;
+    bool firstElement = true;
 
     while (currentSize < targetSize) {
         std::string element = generator.generate();
-        oss << element;
-        currentSize += element.size();
 
-        if (currentSize < targetSize) {
+        // Добавляем запятую ПЕРЕД элементом (кроме первого)
+        if (!firstElement) {
             oss << ",\n";
             currentSize += 2;
         }
+        firstElement = false;
+
+        oss << element;
+        currentSize += element.size();
     }
 
     return oss.str();
