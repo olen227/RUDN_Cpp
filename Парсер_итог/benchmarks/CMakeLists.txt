@@ -1,23 +1,94 @@
-# Benchmarks CMakeLists.txt
+cmake_minimum_required(VERSION 3.14)
+project(JsonParser VERSION 1.0 LANGUAGES CXX)
 
-# Создание исполняемого файла для бенчмарков
-add_executable(parser_benchmark
-    benchmark_main.cpp
-    benchmark_parser.cpp
-    benchmark_memory.cpp
+# C++17
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Опции проекта
+option(BUILD_TESTS "Build unit and integration tests" ON)
+option(BUILD_BENCHMARKS "Build performance benchmarks" ON)
+option(ENABLE_PROFILING "Enable profiling instrumentation" OFF)
+
+# Поддержка многопоточности
+find_package(Threads REQUIRED)
+
+# ============================================================================
+# Библиотека JSON парсера
+# ============================================================================
+
+set(PARSER_SOURCES
+    src/Lexer.cpp
+    src/Parser.cpp
+    src/JsonValue.cpp
+    src/Serializer.cpp
+    src/Generator.cpp
+    src/Validator.cpp
+    src/ParallelProcessor.cpp
 )
 
-# Линковка с библиотекой парсера
-target_link_libraries(parser_benchmark
-    PRIVATE
-    jsonparser_lib
-    Threads::Threads
+set(PARSER_HEADERS
+    include/JsonValue.hpp
+    include/Lexer.hpp
+    include/Parser.hpp
+    include/Serializer.hpp
+    include/Generator.hpp
+    include/Validator.hpp
+    include/ParallelProcessor.hpp
+    include/SystemInfo.hpp
+    include/ProgressBar.hpp
 )
 
-# Добавление цели для запуска бенчмарков
-add_custom_target(run_benchmarks
-    COMMAND $<TARGET_FILE:parser_benchmark>
-    DEPENDS parser_benchmark
-    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-    COMMENT "Running benchmarks..."
-)
+# Создание статической библиотеки для переиспользования в тестах
+add_library(jsonparser_lib STATIC ${PARSER_SOURCES} ${PARSER_HEADERS})
+target_include_directories(jsonparser_lib PUBLIC ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(jsonparser_lib PUBLIC Threads::Threads)
+
+# Включение профилирования если требуется
+if(ENABLE_PROFILING)
+    target_compile_definitions(jsonparser_lib PUBLIC ENABLE_PROFILING)
+    if(NOT MSVC)
+        target_compile_options(jsonparser_lib PUBLIC -pg)
+        target_link_options(jsonparser_lib PUBLIC -pg)
+    endif()
+endif()
+
+# ============================================================================
+# Основной исполняемый файл
+# ============================================================================
+
+add_executable(jsonparser src/main.cpp)
+target_link_libraries(jsonparser PRIVATE jsonparser_lib)
+
+# Google Test
+if(BUILD_TESTS)
+    # Загрузка Google Test через FetchContent
+    include(FetchContent)
+    FetchContent_Declare(
+        googletest
+        GIT_REPOSITORY https://github.com/google/googletest.git
+        GIT_TAG v1.14.0
+    )
+    # Для Windows: предотвращение переопределения родительских настроек компилятора
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+
+    # Включение тестирования
+    enable_testing()
+
+    # Unit и интеграционные тесты
+    add_subdirectory(tests)
+endif()
+
+# Benchmarks
+if(BUILD_BENCHMARKS)
+    add_subdirectory(benchmarks)
+endif()
+
+# Информация о сборке
+message(STATUS "C++ Standard: ${CMAKE_CXX_STANDARD}")
+message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+message(STATUS "Build tests: ${BUILD_TESTS}")
+message(STATUS "Build benchmarks: ${BUILD_BENCHMARKS}")
+message(STATUS "Enable profiling: ${ENABLE_PROFILING}")
